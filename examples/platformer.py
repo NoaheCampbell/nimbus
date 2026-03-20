@@ -38,10 +38,14 @@ class PlatformerScene(Scene):
         W, H = self.width, self.height
 
         # -- Player --
+        # kinematic=True: PhysicsSystem skips this entity entirely.
+        # We apply gravity manually in update() AFTER collision resolution
+        # to avoid the push/pull jitter that occurs when physics and
+        # collision run in separate passes.
         player = Entity(name="player")
         player.add(Transform(x=80, y=H - 120))
         player.add(RectRenderer(width=28, height=36, color=(80, 160, 255), layer=2))
-        player.add(PhysicsBody(gravity=1200, drag=0))
+        player.add(PhysicsBody(gravity=1200, drag=0, kinematic=True))
         player.add(BoxCollider(width=28, height=36))
         player.add(Tag("player"))
         self.add(player)
@@ -140,9 +144,15 @@ class PlatformerScene(Scene):
         if Input.key_held("right"): pb.velocity_x =  speed
         if Input.key_held("left"):  pb.velocity_x = -speed
 
-        # -- Platform collision (solid response) --
+        # -- Apply gravity manually (kinematic body) --
+        pb.velocity_y += pb.gravity * dt
+
+        # -- Integrate position --
+        pt.x += pb.velocity_x * dt
+        pt.y += pb.velocity_y * dt
+
+        # -- Platform collision (solid response, AFTER integration) --
         on_ground = False
-        player_rect = (pt.x, pt.y, pc.width, pc.height)
 
         for entity in self.query(BoxCollider, Tag):
             tag = entity.get(Tag)
@@ -151,19 +161,17 @@ class PlatformerScene(Scene):
             et = entity.get(Transform)
             ec = entity.get(BoxCollider)
 
-            px, py, pw, ph = player_rect
+            px, py, pw, ph = pt.x, pt.y, pc.width, pc.height
             ex, ey, ew, eh = et.x + ec.offset_x, et.y + ec.offset_y, ec.width, ec.height
 
-            # AABB overlap
             if not (px < ex + ew and px + pw > ex and py < ey + eh and py + ph > ey):
                 continue
 
-            # Resolve: find smallest penetration axis
             overlap_x = min(px + pw - ex, ex + ew - px)
             overlap_y = min(py + ph - ey, ey + eh - py)
 
-            if overlap_y < overlap_x:
-                if py + ph / 2 < ey + eh / 2:
+            if overlap_y <= overlap_x:
+                if py + ph * 0.5 < ey + eh * 0.5:
                     pt.y = ey - ph
                     on_ground = True
                     if pb.velocity_y > 0:
@@ -173,7 +181,7 @@ class PlatformerScene(Scene):
                     if pb.velocity_y < 0:
                         pb.velocity_y = 0
             else:
-                if px + pw / 2 < ex + ew / 2:
+                if px + pw * 0.5 < ex + ew * 0.5:
                     pt.x = ex - pw
                 else:
                     pt.x = ex + ew

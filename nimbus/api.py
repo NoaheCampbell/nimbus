@@ -162,14 +162,18 @@ def screenshot():
     return {"format": "png", "encoding": "base64", "data": base64.b64encode(png).decode()}
 
 
-@app.get("/video", summary="Record gameplay as base64 GIF")
-def video(duration: float = 2.0, fps: int = 15):
-    """Records the game for `duration` seconds (max 10) at `fps` fps (max 30)."""
-    import io, time
+@app.get("/video", summary="Record gameplay as base64 MP4")
+def video(duration: float = 2.0, fps: int = 20):
+    """Records the game for `duration` seconds (max 10) at `fps` fps (max 60).
+
+    Returns an MP4 encoded with H.264 — small file size, smooth playback,
+    autoplays natively in Telegram and most platforms.
+    """
+    import io, time, tempfile, os, subprocess
     from PIL import Image
 
     duration = min(max(duration, 0.1), 10.0)
-    fps = min(max(fps, 1), 30)
+    fps = min(max(fps, 1), 60)
 
     engine = get_engine()
     if not engine.is_running:
@@ -177,6 +181,7 @@ def video(duration: float = 2.0, fps: int = 15):
 
     interval = 1.0 / fps
     frames: list[Image.Image] = []
+    timestamps: list[float] = []
     deadline = time.monotonic() + duration
 
     while time.monotonic() < deadline:
@@ -184,20 +189,50 @@ def video(duration: float = 2.0, fps: int = 15):
         png = engine.screenshot()
         if png:
             frames.append(Image.open(io.BytesIO(png)).convert("RGB"))
-        sleep = interval - (time.monotonic() - t0)
+            timestamps.append(t0)
+        next_frame = (timestamps[0] if timestamps else t0) + len(frames) * interval
+        sleep = next_frame - time.monotonic()
         if sleep > 0:
             time.sleep(sleep)
 
     if not frames:
         raise HTTPException(status_code=503, detail="No frames captured.")
 
-    buf = io.BytesIO()
-    frames[0].save(buf, format="GIF", save_all=True, append_images=frames[1:],
-                   duration=int(1000 / fps), loop=0)
+    # Write frames as PNGs into a temp dir, then encode with ffmpeg
+    with tempfile.TemporaryDirectory() as tmpdir:
+        for i, frame in enumerate(frames):
+            frame.save(os.path.join(tmpdir, f"frame_{i:05d}.png"))
+
+        # Compute actual average fps from timestamps
+        if len(timestamps) > 1:
+            actual_fps = (len(timestamps) - 1) / (timestamps[-1] - timestamps[0])
+        else:
+            actual_fps = fps
+
+        out_path = os.path.join(tmpdir, "output.mp4")
+        cmd = [
+            "ffmpeg", "-y",
+            "-framerate", str(actual_fps),
+            "-i", os.path.join(tmpdir, "frame_%05d.png"),
+            "-c:v", "libx264",
+            "-preset", "fast",
+            "-crf", "23",          # quality (lower = better, 18-28 is typical)
+            "-pix_fmt", "yuv420p", # required for broad compatibility
+            "-movflags", "+faststart",
+            out_path,
+        ]
+        result = subprocess.run(cmd, capture_output=True)
+        if result.returncode != 0:
+            raise HTTPException(status_code=500,
+                detail=f"ffmpeg error:\n{result.stderr.decode()}")
+
+        with open(out_path, "rb") as f:
+            mp4_bytes = f.read()
+
     return {
-        "format": "gif", "encoding": "base64",
-        "frames": len(frames), "duration": duration, "fps": fps,
-        "data": base64.b64encode(buf.getvalue()).decode(),
+        "format": "mp4", "encoding": "base64",
+        "frames": len(frames), "duration": duration, "fps": round(actual_fps, 1),
+        "data": base64.b64encode(mp4_bytes).decode(),
     }
 
 

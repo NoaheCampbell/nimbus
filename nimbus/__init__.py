@@ -1,7 +1,21 @@
-"""Nimbus — a 2D game engine for autonomous agent development."""
+"""Nimbus — agent-friendly 2D game engine."""
 
-from nimbus.entity import Entity
-from nimbus.scene import Scene
+from nimbus.core.entity import Entity
+from nimbus.core.scene import Scene
+from nimbus.core.component import Component
 from nimbus.input import Input
 
-__all__ = ["Entity", "Scene", "Input"]
+# Components
+from nimbus.components.transform import Transform
+from nimbus.components.rect_renderer import RectRenderer
+from nimbus.components.sprite_renderer import SpriteRenderer
+from nimbus.components.physics_body import PhysicsBody
+from nimbus.components.box_collider import BoxCollider
+from nimbus.components.script import Script
+from nimbus.components.tag import Tag
+
+__all__ = [
+    "Entity", "Scene", "Component", "Input",
+    "Transform", "RectRenderer", "SpriteRenderer",
+    "PhysicsBody", "BoxCollider", "Script", "Tag",
+]

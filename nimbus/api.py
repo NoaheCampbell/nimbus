@@ -188,7 +188,10 @@ def video(duration: float = 2.0, fps: int = 20):
         t0 = time.monotonic()
         png = engine.screenshot()
         if png:
-            frames.append(Image.open(io.BytesIO(png)).convert("RGB"))
+            # Use frombytes to eagerly decode — avoids lazy-load GC issues
+            img = Image.open(io.BytesIO(png))
+            img.load()  # force decode before BytesIO goes out of scope
+            frames.append(img.convert("RGB"))
             timestamps.append(t0)
         next_frame = (timestamps[0] if timestamps else t0) + len(frames) * interval
         sleep = next_frame - time.monotonic()
@@ -198,26 +201,37 @@ def video(duration: float = 2.0, fps: int = 20):
     if not frames:
         raise HTTPException(status_code=503, detail="No frames captured.")
 
-    # Write frames as PNGs into a temp dir, then encode with ffmpeg
-    with tempfile.TemporaryDirectory() as tmpdir:
-        for i, frame in enumerate(frames):
-            frame.save(os.path.join(tmpdir, f"frame_{i:05d}.png"))
+    # Use requested fps for encoding — the capture loop already sleeps to match it.
+    # Computing fps from timestamps produces wildly high values when frames are
+    # captured faster than expected (e.g. static scenes with fast PIL decode).
+    actual_fps = float(fps)
 
-        # Compute actual average fps from timestamps
-        if len(timestamps) > 1:
-            actual_fps = (len(timestamps) - 1) / (timestamps[-1] - timestamps[0])
-        else:
-            actual_fps = fps
+    frame_duration = 1.0 / actual_fps  # seconds per frame
+
+    # Write frames + concat list, then encode with ffmpeg
+    tmpdir = tempfile.mkdtemp()
+    try:
+        frame_paths = []
+        for i, frame in enumerate(frames):
+            path = os.path.join(tmpdir, f"frame_{i:05d}.png")
+            frame.save(path)
+            frame_paths.append(path)
+
+        # Build ffmpeg concat file — more reliable than printf pattern
+        concat_path = os.path.join(tmpdir, "frames.txt")
+        with open(concat_path, "w") as f:
+            for path in frame_paths:
+                f.write(f"file '{path}'\nduration {frame_duration:.6f}\n")
 
         out_path = os.path.join(tmpdir, "output.mp4")
         cmd = [
             "ffmpeg", "-y",
-            "-framerate", str(actual_fps),
-            "-i", os.path.join(tmpdir, "frame_%05d.png"),
+            "-f", "concat", "-safe", "0",
+            "-i", concat_path,
             "-c:v", "libx264",
             "-preset", "fast",
-            "-crf", "23",          # quality (lower = better, 18-28 is typical)
-            "-pix_fmt", "yuv420p", # required for broad compatibility
+            "-crf", "23",
+            "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             out_path,
         ]
@@ -228,6 +242,9 @@ def video(duration: float = 2.0, fps: int = 20):
 
         with open(out_path, "rb") as f:
             mp4_bytes = f.read()
+    finally:
+        import shutil
+        shutil.rmtree(tmpdir, ignore_errors=True)
 
     return {
         "format": "mp4", "encoding": "base64",

@@ -173,6 +173,67 @@ def screenshot():
     return {"format": "png", "encoding": "base64", "data": encoded}
 
 
+@app.get("/video", summary="Capture a short gameplay video as base64 GIF")
+def video(duration: float = 2.0, fps: int = 15):
+    """
+    Records the game for `duration` seconds at `fps` frames per second and
+    returns an animated GIF as a base64-encoded string.
+
+    Parameters:
+    - **duration**: Recording length in seconds (max 10, default 2)
+    - **fps**: Capture frame rate (max 30, default 30)
+
+    The GIF can be decoded and displayed directly by the caller, or passed
+    to a vision model to understand motion and game behaviour over time.
+    """
+    import io
+    import time
+    from PIL import Image
+
+    duration = min(max(duration, 0.1), 10.0)
+    fps = min(max(fps, 1), 30)
+
+    engine = get_engine()
+    if not engine.is_running:
+        raise HTTPException(status_code=503, detail="Engine window not ready yet.")
+
+    frame_interval = 1.0 / fps
+    frames: list[Image.Image] = []
+    deadline = time.monotonic() + duration
+
+    while time.monotonic() < deadline:
+        frame_start = time.monotonic()
+        png_bytes = engine.screenshot()
+        if png_bytes:
+            frames.append(Image.open(io.BytesIO(png_bytes)).convert("RGB"))
+        elapsed = time.monotonic() - frame_start
+        sleep_for = frame_interval - elapsed
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+
+    if not frames:
+        raise HTTPException(status_code=503, detail="No frames captured.")
+
+    buf = io.BytesIO()
+    frames[0].save(
+        buf,
+        format="GIF",
+        save_all=True,
+        append_images=frames[1:],
+        duration=int(1000 / fps),  # ms per frame
+        loop=0,
+    )
+    encoded = base64.b64encode(buf.getvalue()).decode("utf-8")
+    return {
+        "format": "gif",
+        "encoding": "base64",
+        "frames": len(frames),
+        "duration": duration,
+        "fps": fps,
+        "data": encoded,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Server startup helper
 # ---------------------------------------------------------------------------

@@ -108,8 +108,10 @@ def scripts_load(payload: ScriptLoad):
 
     try:
         spec = importlib.util.spec_from_file_location("_nimbus_user_scene", script_path)
-        module = importlib.util.module_from_spec(spec)   # type: ignore[arg-type]
-        spec.loader.exec_module(module)                   # type: ignore[union-attr]
+        if spec is None or spec.loader is None:
+            raise ImportError(f"Could not create module spec for {script_path}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
     except Exception:
         raise HTTPException(status_code=400, detail=f"Script error:\n{traceback.format_exc()}")
 

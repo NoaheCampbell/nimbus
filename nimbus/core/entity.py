@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Type, TypeVar
+from typing import Type, TypeVar, cast
 
 from nimbus.core.component import Component
 
@@ -44,11 +44,11 @@ class Entity:
         comp = self._components.get(component_type)
         if comp is None:
             raise KeyError(f"{self.name!r} has no {component_type.__name__} component")
-        return comp  # type: ignore[return-value]
+        return cast(T, comp)
 
     def try_get(self, component_type: Type[T]) -> T | None:
         """Get a component by type, or None if not present."""
-        return self._components.get(component_type)  # type: ignore[return-value]
+        return cast(T, self._components.get(component_type))
 
     def has(self, *component_types: type) -> bool:
         """True if the entity has ALL of the given component types."""

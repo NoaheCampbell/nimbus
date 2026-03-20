@@ -66,8 +66,10 @@ class Script:
 
         try:
             spec = importlib.util.spec_from_file_location("_nimbus_script", self.path)
-            mod = importlib.util.module_from_spec(spec)   # type: ignore[arg-type]
-            spec.loader.exec_module(mod)                   # type: ignore[union-attr]
+            if spec is None or spec.loader is None:
+                raise ImportError(f"Could not create module spec for {self.path}")
+            mod = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(mod)
 
             self._start        = getattr(mod, "start",        None)
             self._update       = getattr(mod, "update",       None)

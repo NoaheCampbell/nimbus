@@ -162,14 +162,17 @@ def screenshot():
     return {"format": "png", "encoding": "base64", "data": base64.b64encode(png).decode()}
 
 
-@app.get("/video", summary="Record gameplay as base64 MP4")
-def video(duration: float = 2.0, fps: int = 20):
+@app.get("/video", summary="Record gameplay as base64 MP4 (+ optional GIF)")
+def video(duration: float = 2.0, fps: int = 20, gif: bool = False):
     """Records the game for `duration` seconds (max 10) at `fps` fps (max 60).
 
-    Returns an MP4 encoded with H.264 — small file size, smooth playback,
-    autoplays natively in Telegram and most platforms.
+    Returns an H.264 MP4 — small, smooth, autoplays in Telegram.
+
+    Set `gif=true` to also receive an animated GIF in the response.
+    GIFs embed inline in GitHub PR descriptions; MP4s do not.
+    For PRs, use a short duration (3-4s) and low fps (10) to keep GIF size small.
     """
-    import io, time, tempfile, os, subprocess
+    import io, time, tempfile, os, subprocess, shutil
     from PIL import Image
 
     duration = min(max(duration, 0.1), 10.0)
@@ -195,52 +198,55 @@ def video(duration: float = 2.0, fps: int = 20):
         raise HTTPException(status_code=503, detail="No frames captured.")
 
     actual_fps = float(fps)
+    frame_duration = 1.0 / actual_fps
 
-    frame_duration = 1.0 / actual_fps  # seconds per frame
-
-    # Write frames + concat list, then encode with ffmpeg
     tmpdir = tempfile.mkdtemp()
+    result = {
+        "frames": len(frames),
+        "duration": duration,
+        "fps": actual_fps,
+    }
+
     try:
+        # -- Write frames --
         frame_paths = []
         for i, frame in enumerate(frames):
             path = os.path.join(tmpdir, f"frame_{i:05d}.png")
             frame.save(path)
             frame_paths.append(path)
 
-        # Build ffmpeg concat file — more reliable than printf pattern
+        # -- MP4 via ffmpeg --
         concat_path = os.path.join(tmpdir, "frames.txt")
         with open(concat_path, "w") as f:
             for path in frame_paths:
                 f.write(f"file '{path}'\nduration {frame_duration:.6f}\n")
 
-        out_path = os.path.join(tmpdir, "output.mp4")
-        cmd = [
-            "ffmpeg", "-y",
-            "-f", "concat", "-safe", "0",
-            "-i", concat_path,
-            "-c:v", "libx264",
-            "-preset", "fast",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
-            out_path,
-        ]
-        result = subprocess.run(cmd, capture_output=True)
-        if result.returncode != 0:
+        mp4_path = os.path.join(tmpdir, "output.mp4")
+        r = subprocess.run([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_path,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4_path,
+        ], capture_output=True)
+        if r.returncode != 0:
             raise HTTPException(status_code=500,
-                detail=f"ffmpeg error:\n{result.stderr.decode()}")
+                detail=f"ffmpeg error:\n{r.stderr.decode()}")
 
-        with open(out_path, "rb") as f:
-            mp4_bytes = f.read()
+        with open(mp4_path, "rb") as f:
+            result["mp4"] = base64.b64encode(f.read()).decode()
+
+        # -- GIF (optional) --
+        if gif:
+            gif_buf = io.BytesIO()
+            frame_ms = int(1000 / actual_fps)
+            frames[0].save(gif_buf, format="GIF", save_all=True,
+                           append_images=frames[1:],
+                           duration=frame_ms, loop=0, optimize=True)
+            result["gif"] = base64.b64encode(gif_buf.getvalue()).decode()
+
     finally:
-        import shutil
         shutil.rmtree(tmpdir, ignore_errors=True)
 
-    return {
-        "format": "mp4", "encoding": "base64",
-        "frames": len(frames), "duration": duration, "fps": round(actual_fps, 1),
-        "data": base64.b64encode(mp4_bytes).decode(),
-    }
+    return result
 
 
 # ---------------------------------------------------------------------------

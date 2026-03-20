@@ -250,6 +250,157 @@ def video(duration: float = 2.0, fps: int = 20, gif: bool = False):
 
 
 # ---------------------------------------------------------------------------
+# Playtest
+# ---------------------------------------------------------------------------
+
+class PlaytestInput(BaseModel):
+    t: float              # time in seconds from start to fire this input
+    key: str              # key name (e.g. "right", "space", "left")
+    hold: float = 0.0     # how long to hold in seconds (0 = single frame press)
+
+class PlaytestPayload(BaseModel):
+    duration: float = 5.0
+    fps: int = 20
+    inputs: list[PlaytestInput] = []
+    gif: bool = False
+
+
+@app.post("/playtest", summary="Run a timed input sequence while recording")
+def playtest(payload: PlaytestPayload):
+    """
+    The core agent playtest loop — in one call:
+
+    1. Starts recording the game
+    2. Fires keyboard inputs at specified timestamps
+    3. Returns MP4 + optional GIF of the full sequence
+
+    The agent should:
+    - Call GET /state first to get entity positions and speeds
+    - Calculate timings from that data (e.g. distance / speed = hold duration)
+    - POST /playtest with the derived input sequence and required duration
+    - Verify the result via the returned video and optional POST /assert
+
+    Example::
+
+        POST /playtest
+        {
+          "duration": 4.0,
+          "fps": 20,
+          "gif": true,
+          "inputs": [
+            {"t": 0.2, "key": "right", "hold": 0.8},
+            {"t": 1.2, "key": "space"},
+            {"t": 1.5, "key": "right", "hold": 1.0}
+          ]
+        }
+    """
+    import io, time, tempfile, os, subprocess, shutil, threading
+    from PIL import Image
+    from nimbus.input import Input as NimbusInput
+
+    duration = min(max(payload.duration, 0.1), 30.0)
+    fps = min(max(payload.fps, 1), 60)
+
+    engine = get_engine()
+    if not engine.is_running:
+        raise HTTPException(status_code=503, detail="Engine not running.")
+
+    # Sort inputs by time
+    inputs = sorted(payload.inputs, key=lambda i: i.t)
+
+    interval = 1.0 / fps
+    frames: list[Image.Image] = []
+    start = time.monotonic()
+
+    # Track which hold-inputs are currently active: key → release_time
+    active_holds: dict[str, float] = {}
+
+    # Make sure we start clean
+    NimbusInput._sim_release_all()
+
+    while True:
+        now = time.monotonic()
+        elapsed = now - start
+
+        if elapsed >= duration:
+            break
+
+        # Fire any inputs whose time has come
+        for inp in list(inputs):
+            if inp.t <= elapsed:
+                if inp.hold > 0:
+                    NimbusInput._sim_hold(inp.key)
+                    active_holds[inp.key] = start + inp.t + inp.hold
+                else:
+                    NimbusInput._sim_press(inp.key)
+                inputs.remove(inp)
+
+        # Release holds whose time is up
+        for key, release_at in list(active_holds.items()):
+            if time.monotonic() >= release_at:
+                NimbusInput._sim_release(key)
+                del active_holds[key]
+
+        # Capture frame
+        png = engine.screenshot()
+        if png:
+            img = Image.open(io.BytesIO(png))
+            img.load()
+            frames.append(img.convert("RGB"))
+
+        time.sleep(interval)
+
+    # Clean up any lingering simulated input
+    NimbusInput._sim_release_all()
+
+    if not frames:
+        raise HTTPException(status_code=503, detail="No frames captured.")
+
+    actual_fps = float(fps)
+    frame_duration = 1.0 / actual_fps
+    result: dict = {"frames": len(frames), "duration": duration, "fps": actual_fps}
+
+    tmpdir = tempfile.mkdtemp()
+    try:
+        frame_paths = []
+        for i, frame in enumerate(frames):
+            path = os.path.join(tmpdir, f"frame_{i:05d}.png")
+            frame.save(path)
+            frame_paths.append(path)
+
+        concat_path = os.path.join(tmpdir, "frames.txt")
+        with open(concat_path, "w") as f:
+            for path in frame_paths:
+                f.write(f"file '{path}'\nduration {frame_duration:.6f}\n")
+
+        mp4_path = os.path.join(tmpdir, "output.mp4")
+        r = subprocess.run([
+            "ffmpeg", "-y", "-f", "concat", "-safe", "0", "-i", concat_path,
+            "-c:v", "libx264", "-preset", "fast", "-crf", "23",
+            "-pix_fmt", "yuv420p", "-movflags", "+faststart", mp4_path,
+        ], capture_output=True)
+        if r.returncode != 0:
+            raise HTTPException(status_code=500,
+                detail=f"ffmpeg error:\n{r.stderr.decode()}")
+
+        with open(mp4_path, "rb") as f:
+            result["mp4"] = base64.b64encode(f.read()).decode()
+
+        if payload.gif:
+            gif_buf = io.BytesIO()
+            frame_ms = int(1000 / actual_fps)
+            frames[0].save(gif_buf, format="GIF", save_all=True,
+                           append_images=frames[1:],
+                           duration=frame_ms, loop=0, optimize=True)
+            result["gif"] = base64.b64encode(gif_buf.getvalue()).decode()
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+    return result
+
+
+# ---------------------------------------------------------------------------
 # Behavioral assertions
 # ---------------------------------------------------------------------------
 

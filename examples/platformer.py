@@ -43,7 +43,7 @@ class PlatformerScene(Scene):
         # to avoid the push/pull jitter that occurs when physics and
         # collision run in separate passes.
         player = Entity(name="player")
-        player.add(Transform(x=80, y=H - 120))
+        player.add(Transform(x=80, y=H - 80))
         player.add(RectRenderer(width=28, height=36, color=(80, 160, 255), layer=2))
         player.add(PhysicsBody(gravity=1200, drag=0, kinematic=True))
         player.add(BoxCollider(width=28, height=36))

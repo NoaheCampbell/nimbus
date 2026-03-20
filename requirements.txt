@@ -1,0 +1,4 @@
+pygame-ce>=2.4.1
+fastapi>=0.110.0
+uvicorn>=0.29.0
+pillow>=10.3.0

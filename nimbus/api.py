@@ -181,29 +181,19 @@ def video(duration: float = 2.0, fps: int = 20):
 
     interval = 1.0 / fps
     frames: list[Image.Image] = []
-    timestamps: list[float] = []
     deadline = time.monotonic() + duration
 
     while time.monotonic() < deadline:
-        t0 = time.monotonic()
         png = engine.screenshot()
         if png:
-            # Use frombytes to eagerly decode — avoids lazy-load GC issues
             img = Image.open(io.BytesIO(png))
-            img.load()  # force decode before BytesIO goes out of scope
+            img.load()
             frames.append(img.convert("RGB"))
-            timestamps.append(t0)
-        next_frame = (timestamps[0] if timestamps else t0) + len(frames) * interval
-        sleep = next_frame - time.monotonic()
-        if sleep > 0:
-            time.sleep(sleep)
+        time.sleep(interval)
 
     if not frames:
         raise HTTPException(status_code=503, detail="No frames captured.")
 
-    # Use requested fps for encoding — the capture loop already sleeps to match it.
-    # Computing fps from timestamps produces wildly high values when frames are
-    # captured faster than expected (e.g. static scenes with fast PIL decode).
     actual_fps = float(fps)
 
     frame_duration = 1.0 / actual_fps  # seconds per frame

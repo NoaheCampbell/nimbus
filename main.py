@@ -1,10 +1,17 @@
 """Nimbus entry point — starts the API server and game engine together."""
 
 import argparse
+import socket
+import sys
 import time
 
 from nimbus.engine import Engine
 from nimbus.api import start_server
+
+
+def _port_in_use(host: str, port: int) -> bool:
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex((host, port)) == 0
 
 
 def main():
@@ -16,6 +23,11 @@ def main():
     parser.add_argument("--host",   type=str, default="127.0.0.1",help="API host (default 127.0.0.1)")
     parser.add_argument("--port",   type=int, default=8765,       help="API port (default 8765)")
     args = parser.parse_args()
+
+    if _port_in_use(args.host, args.port):
+        print(f"❌  Nimbus is already running (port {args.port} is in use).")
+        print(f"   Close the existing window before starting a new instance.")
+        sys.exit(1)
 
     engine = Engine(
         width=args.width,

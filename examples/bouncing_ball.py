@@ -1,59 +1,45 @@
-"""Bouncing Ball — a simple example an agent might write.
+"""Bouncing Ball — ECS version.
 
-Load this into Nimbus with:
+Load with:
     POST /scripts/load  {"path": "examples/bouncing_ball.py"}
-
-Then start the scene:
     POST /scene/start
-
-Then grab a screenshot to see what's happening:
-    GET /screenshot
 """
 
-from nimbus import Entity, Scene
+from nimbus import Scene, Entity, Transform, RectRenderer, PhysicsBody, Script, Tag
 
 
-class Ball(Entity):
-    """A colored ball that bounces around the window."""
-
-    def __init__(self, x=100, y=100, radius=20, color=(255, 80, 80), vx=250, vy=180):
-        super().__init__(
-            x=x,
-            y=y,
-            width=radius * 2,
-            height=radius * 2,
-            color=color,
-        )
-        self.vx = vx  # pixels per second
-        self.vy = vy
-
-    def update(self, dt: float) -> None:
-        self.x += self.vx * dt
-        self.y += self.vy * dt
-
-        # Bounce off walls (scene dimensions come through _scene)
-        if self._scene:
-            right  = self._scene.width  - self.width
-            bottom = self._scene.height - self.height
-
-            if self.x <= 0:
-                self.x = 0
-                self.vx = abs(self.vx)
-            elif self.x >= right:
-                self.x = right
-                self.vx = -abs(self.vx)
-
-            if self.y <= 0:
-                self.y = 0
-                self.vy = abs(self.vy)
-            elif self.y >= bottom:
-                self.y = bottom
-                self.vy = -abs(self.vy)
+BALL_SPEED = 250  # px/sec
 
 
-# -- Scene definition (exported for /scripts/load) -------------------------
-scene = Scene(name="bouncing_ball", bgcolor=(15, 15, 25), width=800, height=600)
+def make_ball(name, x, y, color, vx, vy):
+    e = Entity(name=name)
+    e.add(Transform(x=x, y=y))
+    e.add(RectRenderer(width=24, height=24, color=color))
+    e.add(PhysicsBody(velocity_x=vx, velocity_y=vy))
+    e.add(Tag("ball"))
+    return e
 
-scene.add(Ball(x=100, y=100, color=(255,  80,  80), vx=250, vy=180))
-scene.add(Ball(x=400, y=300, color=( 80, 180, 255), vx=-200, vy=220))
-scene.add(Ball(x=600, y=150, color=( 80, 255, 140), vx=180, vy=-240))
+
+class BouncingBallScene(Scene):
+    def on_load(self):
+        self.add(make_ball("ball_red",   100, 100, (255,  80,  80),  BALL_SPEED, 180))
+        self.add(make_ball("ball_blue",  400, 300, ( 80, 160, 255), -200,  220))
+        self.add(make_ball("ball_green", 600, 150, ( 80, 255, 140),  180, -240))
+
+    def update(self, dt):
+        super().update(dt)
+        # Bounce balls off walls
+        for entity in self.query(Transform, PhysicsBody, RectRenderer):
+            t   = entity.get(Transform)
+            b   = entity.get(PhysicsBody)
+            rr  = entity.get(RectRenderer)
+            right  = self.width  - rr.width
+            bottom = self.height - rr.height
+
+            if t.x <= 0:        t.x = 0;      b.velocity_x =  abs(b.velocity_x)
+            elif t.x >= right:  t.x = right;  b.velocity_x = -abs(b.velocity_x)
+            if t.y <= 0:        t.y = 0;      b.velocity_y =  abs(b.velocity_y)
+            elif t.y >= bottom: t.y = bottom; b.velocity_y = -abs(b.velocity_y)
+
+
+scene = BouncingBallScene(name="bouncing_ball", bgcolor=(15, 15, 25), width=800, height=600)

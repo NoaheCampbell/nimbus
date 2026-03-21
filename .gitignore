@@ -14,6 +14,15 @@ env/
 .env
 *.log
 .DS_Store
+
+# Media — do not commit screenshots/recordings to the repo
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.mp4
+*.webm
+*.mov
 .idea/
 .vscode/
 *.swp
